@@ -1,0 +1,431 @@
+"""
+Analizador Avanzado de Zonas Calientes
+Complemento del scraper para análisis inteligente de patrones
+"""
+
+import sqlite3
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Tuple
+from datetime import datetime, timedelta
+from collections import Counter
+import json
+from pathlib import Path
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+class HotZoneAnalyzer:
+    """Analiza patrones en zonas calientes para optimizar búsqueda"""
+    
+    def __init__(self, db_path: str = "wikiloc_cache.db"):
+        self.db_path = db_path
+        self.df = self._load_data()
+    
+    def _load_data(self) -> pd.DataFrame:
+        """Carga datos de la base de datos"""
+        conn = sqlite3.connect(self.db_path)
+        df = pd.read_sql_query("SELECT * FROM tracks", conn)
+        conn.close()
+        
+        # Convertir tipos
+        df['scraped_at'] = pd.to_datetime(df['scraped_at'])
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        
+        return df
+    
+    def analyze_temporal_patterns(self) -> Dict:
+        """Analiza patrones temporales de los tracks"""
+        if self.df.empty or 'date' not in self.df.columns:
+            return {}
+        
+        df_with_dates = self.df[self.df['date'].notna()].copy()
+        
+        if df_with_dates.empty:
+            return {}
+        
+        df_with_dates['month'] = df_with_dates['date'].dt.month
+        df_with_dates['day_of_week'] = df_with_dates['date'].dt.dayofweek
+        df_with_dates['hour'] = df_with_dates['date'].dt.hour
+        
+        analysis = {
+            'best_months': df_with_dates['month'].value_counts().head(3).to_dict(),
+            'best_days': df_with_dates['day_of_week'].value_counts().head(3).to_dict(),
+            'peak_hours': df_with_dates['hour'].value_counts().head(3).to_dict(),
+            'seasonal_distribution': {
+                'spring': len(df_with_dates[df_with_dates['month'].isin([3,4,5])]),
+                'summer': len(df_with_dates[df_with_dates['month'].isin([6,7,8])]),
+                'autumn': len(df_with_dates[df_with_dates['month'].isin([9,10,11])]),
+                'winter': len(df_with_dates[df_with_dates['month'].isin([12,1,2])])
+            }
+        }
+        
+        return analysis
+    
+    def find_clustering_patterns(self) -> List[Dict]:
+        """Encuentra clusters de tracks (zonas con alta densidad)"""
+        try:
+            from sklearn.cluster import DBSCAN
+            from geopy.distance import geodesic
+        except ImportError:
+            print("⚠️  sklearn no instalado. Instala con: pip install scikit-learn")
+            return []
+        
+        if self.df.empty:
+            return []
+        
+        # Preparar coordenadas
+        coords = self.df[['lat', 'lon']].dropna().values
+        
+        if len(coords) < 3:
+            return []
+        
+        # DBSCAN en coordenadas
+        # eps en km, convertir a grados aproximadamente (1 grado ≈ 111km)
+        db = DBSCAN(eps=0.1, min_samples=3).fit(coords)
+        labels = db.labels_
+        
+        # Analizar clusters
+        clusters = []
+        unique_labels = set(labels)
+        
+        for label in unique_labels:
+            if label == -1:  # Ruido
+                continue
+            
+            cluster_mask = labels == label
+            cluster_coords = coords[cluster_mask]
+            
+            # Centro del cluster
+            center_lat = cluster_coords[:, 0].mean()
+            center_lon = cluster_coords[:, 1].mean()
+            
+            # Radio del cluster
+            distances = [geodesic((center_lat, center_lon), (lat, lon)).km 
+                        for lat, lon in cluster_coords]
+            radius = np.mean(distances)
+            
+            clusters.append({
+                'cluster_id': int(label),
+                'center_lat': float(center_lat),
+                'center_lon': float(center_lon),
+                'radius_km': float(radius),
+                'track_count': int(cluster_mask.sum()),
+                'density_score': float(cluster_mask.sum() / (np.pi * radius**2)) if radius > 0 else 0
+            })
+        
+        # Ordenar por densidad
+        clusters.sort(key=lambda x: x['density_score'], reverse=True)
+        
+        return clusters
+    
+    def analyze_user_behavior(self) -> Dict:
+        """Analiza patrones de comportamiento de usuarios"""
+        if self.df.empty or 'author' not in self.df.columns:
+            return {}
+        
+        user_stats = self.df.groupby('author').agg({
+            'track_id': 'count',
+            'distance_km': 'mean',
+            'duration_hours': 'mean'
+        }).rename(columns={'track_id': 'track_count'})
+        
+        top_users = user_stats.nlargest(10, 'track_count')
+        
+        return {
+            'top_contributors': top_users.to_dict('index'),
+            'avg_tracks_per_user': float(user_stats['track_count'].mean()),
+            'power_users': len(user_stats[user_stats['track_count'] > 10])
+        }
+    
+    def analyze_track_characteristics(self) -> Dict:
+        """Analiza características de los tracks"""
+        if self.df.empty:
+            return {}
+        
+        return {
+            'distance': {
+                'mean': float(self.df['distance_km'].mean()),
+                'median': float(self.df['distance_km'].median()),
+                'std': float(self.df['distance_km'].std()),
+                'min': float(self.df['distance_km'].min()),
+                'max': float(self.df['distance_km'].max())
+            },
+            'duration': {
+                'mean': float(self.df['duration_hours'].mean()),
+                'median': float(self.df['duration_hours'].median()),
+                'std': float(self.df['duration_hours'].std())
+            } if 'duration_hours' in self.df.columns else {},
+            'popularity': {
+                'avg_downloads': float(self.df['downloads'].mean()) if 'downloads' in self.df.columns else 0,
+                'avg_views': float(self.df['views'].mean()) if 'views' in self.df.columns else 0
+            }
+        }
+    
+    def identify_keywords_patterns(self) -> Dict:
+        """Identifica patrones en títulos y descripciones"""
+        if self.df.empty:
+            return {}
+        
+        # Palabras clave micológicas
+        mushroom_keywords = [
+            'setas', 'hongos', 'bolets', 'perretxikos', 'cogumelos',
+            'níscalo', 'boletus', 'rebozuelo', 'cantharellus',
+            'bosque', 'hayedo', 'robledal', 'pinar',
+            'otoño', 'primavera', 'lluvia'
+        ]
+        
+        # Contar ocurrencias en títulos
+        title_text = ' '.join(self.df['title'].fillna('').str.lower())
+        keyword_counts = {kw: title_text.count(kw) for kw in mushroom_keywords}
+        
+        # Filtrar keywords con ocurrencias
+        keyword_counts = {k: v for k, v in keyword_counts.items() if v > 0}
+        
+        return {
+            'keyword_frequency': dict(sorted(keyword_counts.items(), 
+                                            key=lambda x: x[1], 
+                                            reverse=True)),
+            'total_mushroom_references': sum(keyword_counts.values())
+        }
+    
+    def generate_hot_zone_recommendations(self) -> List[Dict]:
+        """Genera recomendaciones de nuevas zonas calientes basadas en datos"""
+        clusters = self.find_clustering_patterns()
+        
+        if not clusters:
+            return []
+        
+        recommendations = []
+        
+        for cluster in clusters[:5]:  # Top 5 clusters
+            # Analizar tracks en el cluster
+            cluster_tracks = self.df[
+                (self.df['lat'].between(
+                    cluster['center_lat'] - 0.1, 
+                    cluster['center_lat'] + 0.1)) &
+                (self.df['lon'].between(
+                    cluster['center_lon'] - 0.1, 
+                    cluster['center_lon'] + 0.1))
+            ]
+            
+            if cluster_tracks.empty:
+                continue
+            
+            # Calcular score de la zona
+            score = self._calculate_zone_score(cluster_tracks)
+            
+            # Identificar provincia (simplificado)
+            province = cluster_tracks['province'].mode()[0] if 'province' in cluster_tracks.columns else "Desconocida"
+            
+            recommendations.append({
+                'name': f"Zona caliente {cluster['cluster_id'] + 1}",
+                'lat': cluster['center_lat'],
+                'lon': cluster['center_lon'],
+                'radius_km': cluster['radius_km'],
+                'province': province,
+                'track_count': cluster['track_count'],
+                'density_score': cluster['density_score'],
+                'quality_score': score,
+                'avg_distance': float(cluster_tracks['distance_km'].mean()),
+                'recommendation_level': self._get_recommendation_level(score)
+            })
+        
+        return recommendations
+    
+    def _calculate_zone_score(self, tracks_df: pd.DataFrame) -> float:
+        """Calcula score de calidad de una zona"""
+        if tracks_df.empty:
+            return 0.0
+        
+        score = 0.0
+        
+        # Densidad de tracks
+        score += min(len(tracks_df) / 10, 1.0) * 30
+        
+        # Diversidad de usuarios
+        unique_users = tracks_df['author'].nunique() if 'author' in tracks_df.columns else 1
+        score += min(unique_users / 5, 1.0) * 20
+        
+        # Popularidad promedio
+        if 'downloads' in tracks_df.columns:
+            avg_downloads = tracks_df['downloads'].mean()
+            score += min(avg_downloads / 100, 1.0) * 20
+        
+        # Distancia apropiada para setas (5-15km ideal)
+        avg_distance = tracks_df['distance_km'].mean()
+        distance_score = 1.0 - abs(10 - avg_distance) / 10
+        score += max(distance_score, 0) * 15
+        
+        # Recencia
+        if 'scraped_at' in tracks_df.columns:
+            days_old = (datetime.now() - tracks_df['scraped_at'].max()).days
+            recency_score = max(0, 1 - days_old / 365)
+            score += recency_score * 15
+        
+        return min(score, 100.0)
+    
+    def _get_recommendation_level(self, score: float) -> str:
+        """Determina nivel de recomendación"""
+        if score >= 80:
+            return "MUY ALTA"
+        elif score >= 60:
+            return "ALTA"
+        elif score >= 40:
+            return "MEDIA"
+        else:
+            return "BAJA"
+    
+    def create_comprehensive_report(self, output_file: str = "analysis_report.json"):
+        """Crea reporte completo de análisis"""
+        report = {
+            'generated_at': datetime.now().isoformat(),
+            'total_tracks': len(self.df),
+            'temporal_patterns': self.analyze_temporal_patterns(),
+            'clusters': self.find_clustering_patterns(),
+            'user_behavior': self.analyze_user_behavior(),
+            'track_characteristics': self.analyze_track_characteristics(),
+            'keyword_patterns': self.identify_keywords_patterns(),
+            'recommendations': self.generate_hot_zone_recommendations()
+        }
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        
+        print(f"✓ Reporte guardado en: {output_file}")
+        return report
+    
+    def visualize_analysis(self, output_dir: str = "analysis_plots"):
+        """Crea visualizaciones del análisis"""
+        Path(output_dir).mkdir(exist_ok=True)
+        
+        if self.df.empty:
+            print("No hay datos para visualizar")
+            return
+        
+        # 1. Distribución de distancias
+        plt.figure(figsize=(10, 6))
+        plt.hist(self.df['distance_km'], bins=30, edgecolor='black', alpha=0.7)
+        plt.xlabel('Distancia (km)')
+        plt.ylabel('Frecuencia')
+        plt.title('Distribución de Distancias de Tracks')
+        plt.savefig(f"{output_dir}/distance_distribution.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 2. Mapa de calor geográfico
+        if 'lat' in self.df.columns and 'lon' in self.df.columns:
+            plt.figure(figsize=(12, 8))
+            plt.hexbin(self.df['lon'], self.df['lat'], gridsize=30, cmap='YlOrRd')
+            plt.colorbar(label='Densidad de tracks')
+            plt.xlabel('Longitud')
+            plt.ylabel('Latitud')
+            plt.title('Mapa de Calor de Tracks')
+            plt.savefig(f"{output_dir}/geographic_heatmap.png", dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # 3. Top provincias
+        if 'province' in self.df.columns:
+            province_counts = self.df['province'].value_counts().head(10)
+            plt.figure(figsize=(10, 6))
+            province_counts.plot(kind='barh')
+            plt.xlabel('Número de tracks')
+            plt.ylabel('Provincia')
+            plt.title('Top 10 Provincias con más Tracks')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/top_provinces.png", dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        print(f"✓ Visualizaciones guardadas en: {output_dir}/")
+
+def main():
+    """Función principal"""
+    print("🔍 Analizador Avanzado de Zonas Calientes\n")
+    
+    db_path = input("Ruta a base de datos [wikiloc_cache.db]: ").strip() or "wikiloc_cache.db"
+    
+    if not Path(db_path).exists():
+        print(f"❌ No se encontró la base de datos: {db_path}")
+        print("Ejecuta primero el scraper para recolectar datos")
+        return
+    
+    analyzer = HotZoneAnalyzer(db_path)
+    
+    print(f"\n📊 Tracks en base de datos: {len(analyzer.df)}\n")
+    
+    if analyzer.df.empty:
+        print("❌ No hay datos para analizar")
+        return
+    
+    # Menú de opciones
+    print("Opciones de análisis:")
+    print("1. Reporte completo (JSON)")
+    print("2. Visualizaciones")
+    print("3. Recomendaciones de zonas calientes")
+    print("4. Análisis temporal")
+    print("5. Todo lo anterior")
+    
+    choice = input("\nSelección [5]: ").strip() or "5"
+    
+    if choice in ['1', '5']:
+        print("\n📄 Generando reporte completo...")
+        report = analyzer.create_comprehensive_report()
+        
+        print("\n" + "="*60)
+        print("RESUMEN DEL REPORTE")
+        print("="*60)
+        print(f"Total tracks analizados: {report['total_tracks']}")
+        print(f"Clusters encontrados: {len(report['clusters'])}")
+        print(f"Recomendaciones: {len(report['recommendations'])}")
+        print("="*60)
+    
+    if choice in ['2', '5']:
+        print("\n📊 Generando visualizaciones...")
+        analyzer.visualize_analysis()
+    
+    if choice in ['3', '5']:
+        print("\n🎯 Recomendaciones de zonas calientes:")
+        recommendations = analyzer.generate_hot_zone_recommendations()
+        
+        for i, rec in enumerate(recommendations, 1):
+            print(f"\n{i}. {rec['name']}")
+            print(f"   📍 Coordenadas: {rec['lat']:.4f}, {rec['lon']:.4f}")
+            print(f"   📏 Radio: {rec['radius_km']:.2f} km")
+            print(f"   🗺️  Provincia: {rec['province']}")
+            print(f"   📈 Tracks: {rec['track_count']}")
+            print(f"   ⭐ Score: {rec['quality_score']:.1f}/100")
+            print(f"   🏆 Nivel: {rec['recommendation_level']}")
+    
+    if choice in ['4', '5']:
+        print("\n📅 Análisis temporal:")
+        temporal = analyzer.analyze_temporal_patterns()
+        
+        if temporal:
+            print("\nMejores meses:")
+            for month, count in list(temporal.get('best_months', {}).items())[:3]:
+                month_names = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 
+                              'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+                print(f"  - {month_names[month-1]}: {count} tracks")
+            
+            print("\nDistribución estacional:")
+            for season, count in temporal.get('seasonal_distribution', {}).items():
+                print(f"  - {season.capitalize()}: {count} tracks")
+    
+    print("\n✅ Análisis completado!")
+
+if __name__ == "__main__":
+    print("""
+╔═══════════════════════════════════════════════════════════╗
+║   🔍 ANALIZADOR AVANZADO DE ZONAS CALIENTES 🔍           ║
+╚═══════════════════════════════════════════════════════════╝
+
+Instalación adicional requerida:
+pip install pandas numpy matplotlib seaborn scikit-learn
+
+    """)
+    
+    try:
+        main()
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
