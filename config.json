@@ -1,0 +1,68 @@
+{
+  "hot_zones": [
+    {
+      "name": "Sierra de Guadarrama",
+      "lat": 40.7736,
+      "lon": -4.0117,
+      "radius": 20,
+      "province": "Madrid",
+      "keywords": ["setas", "guadarrama", "hayedo", "pinar"]
+    },
+    {
+      "name": "Picos de Europa",
+      "lat": 43.1965,
+      "lon": -4.8152,
+      "radius": 15,
+      "province": "León",
+      "keywords": ["setas", "montaña", "bosque"]
+    },
+    {
+      "name": "Pirineos Catalanes",
+      "lat": 42.3453,
+      "lon": 1.7318,
+      "radius": 25,
+      "province": "Lleida",
+      "keywords": ["bolets", "pirineu", "muntanya"]
+    }
+  ],
+  "scraping": {
+    "use_selenium": false,
+    "headless": true,
+    "min_delay": 2,
+    "max_delay": 5,
+    "strategies": ["coordinates", "keywords", "api"],
+    "max_tracks_per_zone": 100,
+    "timeout": 15
+  },
+  "detector": {
+    "max_mushroom_speed": 3.0,
+    "stop_speed_threshold": 0.5,
+    "min_stop_duration": 60,
+    "direction_change_threshold": 30,
+    "spring_months": [3, 4, 5],
+    "autumn_months": [9, 10, 11],
+    "day_start": "08:00",
+    "day_end": "20:00",
+    "min_duration_hours": 2,
+    "max_duration_hours": 6,
+    "weights": {
+      "tortuosity": 0.20,
+      "avg_speed": 0.15,
+      "direction_changes": 0.15,
+      "stops": 0.10,
+      "season": 0.10,
+      "daytime": 0.10,
+      "duration": 0.10,
+      "altitude_variability": 0.05,
+      "spatial_density": 0.05
+    }
+  },
+  "output": {
+    "gpx_directory": "gpx_files",
+    "plots_directory": "analysis_plots",
+    "database_path": "wikiloc_cache.db",
+    "heatmap_file": "tracks_heatmap.html",
+    "results_file": "tracks_found.json",
+    "analysis_file": "analysis_report.json"
+  }
+}
